@@ -1,0 +1,356 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: litellm 1.82.8 Supply Chain Scanner - Single Account
+
+Parameters:
+  NotificationEmail:
+    Type: String
+    Description: Email address to receive scan results (optional)
+    Default: ""
+  ResultsBucketName:
+    Type: String
+    Description: S3 bucket name for scan results (leave blank to auto-generate)
+    Default: ""
+
+Conditions:
+  HasEmail: !Not [!Equals [!Ref NotificationEmail, ""]]
+  AutoBucketName: !Equals [!Ref ResultsBucketName, ""]
+
+Resources:
+
+  ResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !If
+        - AutoBucketName
+        - !Sub "litellm-scan-results-${AWS::AccountId}-${AWS::Region}"
+        - !Ref ResultsBucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldScans
+            Status: Enabled
+            ExpirationInDays: 90
+
+  ScanResultsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "litellm-scan-results-${AWS::AccountId}"
+
+  ScanResultsSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasEmail
+    Properties:
+      TopicArn: !Ref ScanResultsTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  ScannerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "litellm-scanner-${AWS::StackName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: litellm-scanner-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadOnly
+                Effect: Allow
+                Action:
+                  - lambda:ListFunctions
+                  - lambda:GetLayerVersionByArn
+                  - ecr:DescribeRepositories
+                  - ecr:DescribeImages
+                  - ecs:ListTaskDefinitions
+                  - ecs:DescribeTaskDefinition
+                  - codebuild:ListProjects
+                  - codebuild:BatchGetProjects
+                  - ec2:DescribeInstances
+                  - ssm:SendCommand
+                  - ssm:GetCommandInvocation
+                  - cloudtrail:LookupEvents
+                  - guardduty:ListDetectors
+                  - guardduty:ListFindings
+                  - guardduty:GetFindings
+                Resource: "*"
+              - Sid: S3Results
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub "${ResultsBucket.Arn}/*"
+              - Sid: SNSPublish
+                Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref ScanResultsTopic
+
+  ScannerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "litellm-scanner-${AWS::StackName}"
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt ScannerRole.Arn
+      Timeout: 300
+      MemorySize: 256
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref ScanResultsTopic
+          RESULTS_BUCKET: !Ref ResultsBucket
+          ACCOUNT_ID: !Ref AWS::AccountId
+      Code:
+        ZipFile: |
+          import json, boto3, logging, os
+          from datetime import datetime, timezone
+          from botocore.exceptions import ClientError
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          COMPROMISE_DATE = datetime(2026, 3, 24, tzinfo=timezone.utc)
+          MALICIOUS_VERSION = "1.82.8"
+          MALICIOUS_FILE = "litellm_init.pth"
+
+          def scan(account_id=None):
+              findings = []
+
+              def add(service, resource, severity, detail):
+                  findings.append({"account": account_id or os.environ["ACCOUNT_ID"], "service": service, "resource": resource, "severity": severity, "detail": detail})
+
+              # Lambda
+              try:
+                  client = boto3.client("lambda")
+                  for page in client.get_paginator("list_functions").paginate():
+                      for fn in page["Functions"]:
+                          name = fn["FunctionName"]
+                          for k, v in fn.get("Environment", {}).get("Variables", {}).items():
+                              if "litellm" in v.lower() and MALICIOUS_VERSION in v:
+                                  add("Lambda", name, "HIGH", f"Env var {k} references litellm {MALICIOUS_VERSION}")
+                          image = fn.get("PackageType") == "Image" and fn.get("Code", {}).get("ImageUri", "")
+                          if image and "litellm" in image.lower():
+                              add("Lambda", name, "MEDIUM", f"Container image references litellm: {image}")
+                          for layer in fn.get("Layers", []):
+                              try:
+                                  info = client.get_layer_version_by_arn(Arn=layer["Arn"])
+                                  if "litellm" in info.get("Description", "").lower():
+                                      add("Lambda", name, "HIGH", f"Layer references litellm: {layer['Arn']}")
+                              except ClientError:
+                                  pass
+              except ClientError as e:
+                  logger.error(f"Lambda scan error: {e}")
+
+              # ECR
+              try:
+                  ecr = boto3.client("ecr")
+                  for repo in ecr.describe_repositories()["repositories"]:
+                      rname = repo["repositoryName"]
+                      for image in ecr.describe_images(repositoryName=rname)["imageDetails"]:
+                          for tag in image.get("imageTags", []):
+                              if "litellm" in tag.lower():
+                                  add("ECR", f"{rname}:{tag}", "MEDIUM", "Image tag references litellm — inspect for litellm_init.pth")
+                          pushed = image.get("imagePushedAt")
+                          if pushed and pushed.replace(tzinfo=timezone.utc) >= COMPROMISE_DATE:
+                              add("ECR", f"{rname}@{image.get('imageDigest','')[:20]}", "INFO", f"Image pushed after {COMPROMISE_DATE.date()} — verify litellm not included")
+              except ClientError as e:
+                  logger.error(f"ECR scan error: {e}")
+
+              # ECS
+              try:
+                  ecs = boto3.client("ecs")
+                  for page in ecs.get_paginator("list_task_definitions").paginate(status="ACTIVE"):
+                      for arn in page["taskDefinitionArns"]:
+                          try:
+                              td = ecs.describe_task_definition(taskDefinition=arn)["taskDefinition"]
+                              for c in td.get("containerDefinitions", []):
+                                  if "litellm" in c.get("image", "").lower():
+                                      add("ECS", arn, "HIGH", f"Container image references litellm: {c['image']}")
+                                  for e in c.get("environment", []):
+                                      if "litellm" in e.get("value", "").lower() and MALICIOUS_VERSION in e.get("value", ""):
+                                          add("ECS", arn, "HIGH", f"Env var {e['name']} references litellm {MALICIOUS_VERSION}")
+                          except ClientError:
+                              pass
+              except ClientError as e:
+                  logger.error(f"ECS scan error: {e}")
+
+              # CodeBuild
+              try:
+                  cb = boto3.client("codebuild")
+                  names = cb.list_projects()["projects"]
+                  for i in range(0, len(names), 100):
+                      for p in cb.batch_get_projects(names=names[i:i+100])["projects"]:
+                          bs = p.get("source", {}).get("buildspec", "")
+                          if bs and "litellm" in bs.lower():
+                              sev = "CRITICAL" if MALICIOUS_VERSION in bs else "MEDIUM"
+                              add("CodeBuild", p["name"], sev, f"Buildspec references litellm {'(MALICIOUS VERSION)' if MALICIOUS_VERSION in bs else ''}")
+                          for ev in p.get("environment", {}).get("environmentVariables", []):
+                              if "litellm" in ev.get("value", "").lower():
+                                  add("CodeBuild", p["name"], "HIGH", f"Env var {ev['name']} references litellm")
+              except ClientError as e:
+                  logger.error(f"CodeBuild scan error: {e}")
+
+              # EC2 via SSM
+              try:
+                  ec2 = boto3.client("ec2")
+                  reservations = ec2.describe_instances(Filters=[{"Name": "instance-state-name", "Values": ["running"]}])["Reservations"]
+                  ids = [i["InstanceId"] for r in reservations for i in r["Instances"]]
+                  if ids:
+                      resp = boto3.client("ssm").send_command(
+                          InstanceIds=ids[:50],
+                          DocumentName="AWS-RunShellScript",
+                          Parameters={"commands": [
+                              f"find / -name '{MALICIOUS_FILE}' 2>/dev/null || echo clean",
+                              "pip show litellm 2>/dev/null | grep Version || echo litellm_not_installed"
+                          ]},
+                          Comment="litellm malware scan", TimeoutSeconds=60
+                      )
+                      add("EC2/SSM", f"CommandId:{resp['Command']['CommandId']}", "INFO", f"SSM scan dispatched to {len(ids[:50])} instances")
+              except ClientError as e:
+                  logger.error(f"SSM scan error: {e}")
+
+              # CloudTrail
+              try:
+                  ct = boto3.client("cloudtrail")
+                  for event_name in ["CreateUser", "CreateAccessKey", "AttachUserPolicy", "AttachRolePolicy", "CreateRole"]:
+                      for event in ct.lookup_events(
+                          LookupAttributes=[{"AttributeKey": "EventName", "AttributeValue": event_name}],
+                          StartTime=COMPROMISE_DATE, MaxResults=10
+                      ).get("Events", []):
+                          detail = json.loads(event.get("CloudTrailEvent", "{}"))
+                          add("CloudTrail", event_name, "MEDIUM",
+                              f"IAM modification after compromise date | user={detail.get('userIdentity',{}).get('arn','unknown')} | ip={detail.get('sourceIPAddress','unknown')} | time={event['EventTime']}")
+              except ClientError as e:
+                  logger.error(f"CloudTrail scan error: {e}")
+
+              # GuardDuty
+              try:
+                  gd = boto3.client("guardduty")
+                  detectors = gd.list_detectors()["DetectorIds"]
+                  if not detectors:
+                      add("GuardDuty", "N/A", "INFO", "GuardDuty is not enabled — recommend enabling it")
+                  for det in detectors:
+                      ids = gd.list_findings(DetectorId=det, FindingCriteria={"Criterion": {
+                          "type": {"Eq": ["UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS", "CredentialAccess:IAMUser/AnomalousBehavior"]},
+                          "updatedAt": {"Gte": int(COMPROMISE_DATE.timestamp() * 1000)}
+                      }})["FindingIds"]
+                      for f in gd.get_findings(DetectorId=det, FindingIds=ids[:50])["Findings"] if ids else []:
+                          add("GuardDuty", f["Id"], "CRITICAL", f"type={f['Type']} | severity={f['Severity']} | title={f['Title']}")
+              except ClientError as e:
+                  logger.error(f"GuardDuty scan error: {e}")
+
+              return findings
+
+          def handler(event, context):
+              findings = scan()
+              summary = {
+                  "scan_time": datetime.now(timezone.utc).isoformat(),
+                  "account": os.environ["ACCOUNT_ID"],
+                  "total_findings": len(findings),
+                  "critical": sum(1 for f in findings if f["severity"] == "CRITICAL"),
+                  "high": sum(1 for f in findings if f["severity"] == "HIGH"),
+                  "medium": sum(1 for f in findings if f["severity"] == "MEDIUM"),
+                  "info": sum(1 for f in findings if f["severity"] == "INFO"),
+                  "findings": findings
+              }
+              bucket = os.environ["RESULTS_BUCKET"]
+              key = f"scans/{datetime.now(timezone.utc).strftime('%Y/%m/%d')}/{os.environ['ACCOUNT_ID']}.json"
+              boto3.client("s3").put_object(Bucket=bucket, Key=key, Body=json.dumps(summary, default=str), ContentType="application/json")
+              sns_arn = os.environ.get("SNS_TOPIC_ARN")
+              if sns_arn:
+                  boto3.client("sns").publish(
+                      TopicArn=sns_arn,
+                      Subject=f"litellm Scan: {summary['critical']} CRITICAL, {summary['high']} HIGH findings",
+                      Message=json.dumps(summary, indent=2, default=str)
+                  )
+              logger.info(json.dumps(summary, default=str))
+              return summary
+
+  TriggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: invoke
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt ScannerFunction.Arn
+
+  TriggerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt TriggerRole.Arn
+      Timeout: 360
+      Code:
+        ZipFile: |
+          import boto3, json, cfnresponse
+          def handler(event, context):
+              if event["RequestType"] == "Delete":
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  return
+              try:
+                  r = boto3.client("lambda").invoke(FunctionName=event["ResourceProperties"]["FunctionName"], InvocationType="RequestResponse")
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {"Result": r["Payload"].read().decode()})
+              except Exception as e:
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+
+  InitialScan:
+    Type: AWS::CloudFormation::CustomResource
+    DependsOn: ScannerFunction
+    Properties:
+      ServiceToken: !GetAtt TriggerFunction.Arn
+      FunctionName: !Ref ScannerFunction
+
+  ScanSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(1 day)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ScannerFunction.Arn
+          Id: litellm-scanner
+
+  ScanSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ScannerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ScanSchedule.Arn
+
+Outputs:
+  ScannerFunctionName:
+    Value: !Ref ScannerFunction
+  ResultsBucketName:
+    Value: !Ref ResultsBucket
+  ScanResultsTopicArn:
+    Value: !Ref ScanResultsTopic
+  ManualInvokeCommand:
+    Value: !Sub "aws lambda invoke --function-name ${ScannerFunction} --payload '{}' scan_results.json && type scan_results.json"

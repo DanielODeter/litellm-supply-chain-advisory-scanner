@@ -42,9 +42,20 @@ If `litellm==1.82.8` was installed anywhere with AWS credentials present:
 
 ## AWS Environment Scanner
 
-This repository includes a CloudFormation template that deploys a Lambda-based scanner across your AWS environment.
+Two deployment models are available depending on your AWS environment.
 
-### What Gets Scanned
+### Deployment Models
+
+| Feature | **Single Account** | **AWS Organizations** |
+|---------|-------------------|----------------------|
+| **Template** | `scanner-single-account.yaml` | `scanner-org.yaml` |
+| **When to use** | One account, dev/test, quick scan | Multiple accounts, production |
+| **Deploy from** | Any account | Management account only |
+| **Results** | Local S3 bucket | Central S3 bucket, all accounts write here |
+| **Notifications** | Per-account SNS | Consolidated org-wide SNS |
+| **IAM required** | Single account role | StackSets service-managed permissions |
+
+### What Gets Scanned (both models)
 
 | Service | What it checks |
 |---------|---------------|
@@ -56,37 +67,86 @@ This repository includes a CloudFormation template that deploys a Lambda-based s
 | CloudTrail | IAM modifications (CreateUser, CreateAccessKey, etc.) after 2026-03-24 |
 | GuardDuty | Credential exfiltration findings since compromise date |
 
-### Deploy
+---
+
+<details>
+<summary>🏢 Option 1: Single Account Deployment</summary>
+
+**When to use:**
+- ✅ Scanning a single AWS account
+- ✅ Development or test environments
+- ✅ Quick one-off scan
 
 ```bat
 cd scanner
-deploy.bat your@email.com
+deploy.bat single your@email.com your-aws-profile
 ```
 
-The stack triggers an immediate scan on deploy, schedules daily re-scans via EventBridge, and optionally emails results via SNS.
+Triggers an immediate scan on deploy, schedules daily re-scans, and optionally emails results via SNS.
 
-**Manual invoke after deploy:**
+**Manual invoke:**
 ```bash
-aws lambda invoke --function-name litellm-environment-scanner --payload '{}' scan_results.json && cat scan_results.json
+aws lambda invoke --function-name litellm-scanner-litellm-scanner-single --payload '{}' results.json
 ```
-
-<details>
-<summary>📋 CloudFormation Parameters & Outputs</summary>
 
 **Parameters:**
-- `NotificationEmail` — optional email address for SNS scan result notifications
+- `NotificationEmail` — optional SNS email
+- `ResultsBucketName` — optional S3 bucket name (auto-generated if blank)
 
-**Outputs:**
-- `ScannerFunctionName` — Lambda function name
-- `ScanResultsTopicArn` — SNS topic ARN
-- `ManualInvokeCommand` — ready-to-run CLI invoke command
+**Outputs:** `ScannerFunctionName`, `ResultsBucketName`, `ScanResultsTopicArn`, `ManualInvokeCommand`
 
-**Resources created:**
-- Lambda function (Python 3.12, 5-min timeout, 256MB)
-- IAM role with least-privilege read-only permissions
-- SNS topic for notifications
-- EventBridge rule for daily scheduled scans
-- CloudFormation custom resource for immediate scan on deploy
+</details>
+
+<details>
+<summary>🏛️ Option 2: AWS Organizations Deployment (Recommended for multi-account)</summary>
+
+**When to use:**
+- ✅ AWS Organizations with multiple member accounts
+- ✅ Production environments
+- ✅ Need consolidated results across all accounts
+
+**Prerequisites:**
+- AWS Organizations enabled
+- CloudFormation StackSets with service-managed permissions enabled
+- Must be deployed from the **management account**
+
+**Enable trusted access for StackSets (one-time):**
+```bash
+aws organizations enable-aws-service-access \
+  --service-principal stacksets.cloudformation.amazonaws.com
+```
+
+**Deploy:**
+```bat
+cd scanner
+deploy.bat org o-xxxxxxxxxx your@email.com your-mgmt-profile "us-east-1,us-west-2"
+```
+
+This deploys:
+1. Central S3 bucket in the management account — all member accounts write results here
+2. StackSet that automatically deploys the member scanner to every account in the org
+3. Aggregator Lambda that consolidates all results daily
+4. SNS topic for org-wide consolidated notifications
+
+**Manual aggregate:**
+```bash
+aws lambda invoke --function-name litellm-aggregator-litellm-scanner-org --payload '{}' aggregated.json
+```
+
+**Check StackSet deployment status:**
+```bash
+aws cloudformation list-stack-instances \
+  --stack-set-name litellm-member-scanner \
+  --query 'Summaries[*].{Account:Account,Region:Region,Status:Status}' \
+  --output table
+```
+
+**Parameters:**
+- `OrganizationId` — your org ID (e.g. `o-xxxxxxxxxx`)
+- `NotificationEmail` — optional consolidated SNS email
+- `DeploymentRegions` — comma-delimited regions (default: `us-east-1`)
+
+**Outputs:** `CentralResultsBucket`, `AggregatorFunctionName`, `ConsolidatedTopicArn`, `ManualAggregateCommand`
 
 </details>
 
