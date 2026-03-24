@@ -192,15 +192,15 @@ aws ssm send-command \
 <details>
 <summary>☁️ AWS Impact by Environment</summary>
 
-| Environment | Severity | What's at risk |
-|-------------|----------|----------------|
-| EC2 Instances | 🔴 CRITICAL | Instance role credentials via IMDS |
-| ECS / EKS Containers | 🔴 CRITICAL | Task/pod role credentials — every container from a compromised image |
-| Lambda (container image) | 🟠 HIGH | Execution role credentials from env vars |
-| CodeBuild | 🟠 HIGH | `AWS_*` env vars injected by the pipeline |
-| Developer laptops | 🟠 HIGH | Long-term IAM keys from `~/.aws/credentials` |
-| SageMaker | 🟠 HIGH | Execution role credentials |
-| Elastic Beanstalk | 🟡 MEDIUM | Instance profile credentials |
+| Resource | Severity | What's at risk | Checked by scanner |
+|----------|----------|----------------|--------------------|
+| EC2 Instances | 🔴 CRITICAL | Instance role credentials via IMDS | ✅ SSM Run Command |
+| ECS / EKS Containers | 🔴 CRITICAL | Task/pod role credentials — every container from a compromised image | ✅ ECS task definitions |
+| Lambda (container image) | 🟠 HIGH | Execution role credentials from env vars | ✅ Lambda functions + layers |
+| CodeBuild | 🟠 HIGH | `AWS_*` env vars injected by the pipeline | ✅ Buildspecs + env vars |
+| Developer laptops | 🟠 HIGH | Long-term IAM keys from `~/.aws/credentials` | ❌ Local only |
+| SageMaker | 🟠 HIGH | Execution role credentials | ❌ Not yet covered |
+| Elastic Beanstalk | 🟡 MEDIUM | Instance profile credentials | ✅ Via SSM if agent installed |
 
 **IMDS note**: The malware explicitly fetches the IMDSv2 token before calling the credentials endpoint. IMDSv2 alone is not a mitigation.
 

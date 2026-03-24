@@ -178,17 +178,17 @@
   <p>This attack is not limited to local developer machines. Any environment where Python runs with AWS credentials present is at risk.</p>
 
   <details open>
-    <summary>☁️ Affected AWS Environments</summary>
+    <summary>☁️ Affected AWS Resources</summary>
     <div class="details-body">
       <table>
-        <tr><th>Environment</th><th>Severity</th><th>What's at risk</th></tr>
-        <tr><td>EC2 Instances</td><td class="sev-critical">CRITICAL</td><td>Instance role credentials via IMDS, <code>~/.aws/</code> if configured</td></tr>
-        <tr><td>ECS / EKS Containers</td><td class="sev-critical">CRITICAL</td><td>Task/pod role credentials from IMDS or env vars — every container spawned from a compromised image is affected</td></tr>
-        <tr><td>Lambda (container image)</td><td class="sev-high">HIGH</td><td>Execution role credentials from env vars injected at runtime</td></tr>
-        <tr><td>CodeBuild</td><td class="sev-high">HIGH</td><td><code>AWS_*</code> env vars injected by the pipeline, often with broad permissions</td></tr>
-        <tr><td>Developer laptops</td><td class="sev-high">HIGH</td><td>Long-term IAM keys from <code>~/.aws/credentials</code>, all named profiles</td></tr>
-        <tr><td>SageMaker notebooks</td><td class="sev-high">HIGH</td><td>Execution role credentials</td></tr>
-        <tr><td>Elastic Beanstalk</td><td class="sev-medium">MEDIUM</td><td>Instance profile credentials if litellm in <code>requirements.txt</code></td></tr>
+        <tr><th>Resource</th><th>Severity</th><th>What's at risk</th><th>Checked by scanner</th></tr>
+        <tr><td>EC2 Instances</td><td class="sev-critical">CRITICAL</td><td>Instance role credentials via IMDS, <code>~/.aws/</code> if configured</td><td>✅ SSM Run Command</td></tr>
+        <tr><td>ECS / EKS Containers</td><td class="sev-critical">CRITICAL</td><td>Task/pod role credentials from IMDS or env vars — every container spawned from a compromised image is affected</td><td>✅ ECS task definitions</td></tr>
+        <tr><td>Lambda (container image)</td><td class="sev-high">HIGH</td><td>Execution role credentials from env vars injected at runtime</td><td>✅ Lambda functions + layers</td></tr>
+        <tr><td>CodeBuild</td><td class="sev-high">HIGH</td><td><code>AWS_*</code> env vars injected by the pipeline, often with broad permissions</td><td>✅ Buildspecs + env vars</td></tr>
+        <tr><td>Developer laptops</td><td class="sev-high">HIGH</td><td>Long-term IAM keys from <code>~/.aws/credentials</code>, all named profiles</td><td>❌ Local only</td></tr>
+        <tr><td>SageMaker notebooks</td><td class="sev-high">HIGH</td><td>Execution role credentials</td><td>❌ Not yet covered</td></tr>
+        <tr><td>Elastic Beanstalk</td><td class="sev-medium">MEDIUM</td><td>Instance profile credentials if litellm in <code>requirements.txt</code></td><td>✅ Via SSM if agent installed</td></tr>
       </table>
       <p><strong>IMDS note:</strong> The malware explicitly fetches the IMDS token and then calls <code>http://169.254.169.254/latest/meta-data/iam/security-credentials/</code>. IMDSv2 is not a mitigation — the malware fetches the token first.</p>
     </div>
