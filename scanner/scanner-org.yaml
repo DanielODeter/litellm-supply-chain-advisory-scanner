@@ -16,6 +16,9 @@ Parameters:
   OrganizationId:
     Type: String
     Description: AWS Organizations ID (e.g. o-xxxxxxxxxx)
+  DeploymentTargetOU:
+    Type: String
+    Description: OU or root ID to deploy member scanners into (e.g. r-xxxx or ou-xxxx)
   DeploymentRegions:
     Type: CommaDelimitedList
     Description: Regions to deploy the member scanner into
@@ -42,6 +45,7 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      ObjectLockEnabled: true
       VersioningConfiguration:
         Status: Enabled
       LifecycleConfiguration:
@@ -65,16 +69,54 @@ Resources:
             Condition:
               StringEquals:
                 aws:PrincipalOrgID: !Ref OrganizationId
-              StringLike:
-                s3:prefix: "scans/*"
+          - Sid: DenyHTTP
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt CentralResultsBucket.Arn
+              - !Sub "${CentralResultsBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
 
   # -------------------------------------------------------
   # SNS for consolidated notifications
   # -------------------------------------------------------
+  SnsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: CMK for litellm scanner SNS topic
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: RootAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: kms:*
+            Resource: "*"
+          - Sid: AllowSNS
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action:
+              - kms:GenerateDataKey
+              - kms:Decrypt
+            Resource: "*"
+
+  SnsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/litellm-scanner-sns-${AWS::StackName}"
+      TargetKeyId: !Ref SnsKey
+
   ConsolidatedTopic:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: litellm-scan-consolidated
+      KmsMasterKeyId: !Ref SnsKey
 
   ConsolidatedSubscription:
     Type: AWS::SNS::Subscription
@@ -112,10 +154,18 @@ Resources:
                   - s3:ListBucket
                 Resource:
                   - !GetAtt CentralResultsBucket.Arn
-                  - !Sub "${CentralResultsBucket.Arn}/*"
+                  - !Sub "${CentralResultsBucket.Arn}/scans/*"
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "${CentralResultsBucket.Arn}/consolidated/*"
               - Effect: Allow
                 Action: sns:Publish
                 Resource: !Ref ConsolidatedTopic
+              - Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Resource: !GetAtt SnsKey.Arn
               - Effect: Allow
                 Action: organizations:ListAccounts
                 Resource: "*"
@@ -239,7 +289,7 @@ Resources:
       StackInstancesGroup:
         - DeploymentTargets:
             OrganizationalUnitIds:
-              - !Ref OrganizationId
+              - !Ref DeploymentTargetOU
           Regions: !Ref DeploymentRegions
       OperationPreferences:
         FailureTolerancePercentage: 50
@@ -280,7 +330,7 @@ Resources:
                         Effect: Allow
                         Action:
                           - lambda:ListFunctions
-                          - lambda:GetLayerVersionByArn
+                          - lambda:GetLayerVersion
                           - ecr:DescribeRepositories
                           - ecr:DescribeImages
                           - ecs:ListTaskDefinitions
@@ -447,6 +497,53 @@ Resources:
                       )
                       logger.info(json.dumps(summary, default=str))
                       return summary
+
+          TriggerRole:
+            Type: AWS::IAM::Role
+            Properties:
+              AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  - Effect: Allow
+                    Principal:
+                      Service: lambda.amazonaws.com
+                    Action: sts:AssumeRole
+              ManagedPolicyArns:
+                - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+              Policies:
+                - PolicyName: invoke
+                  PolicyDocument:
+                    Version: "2012-10-17"
+                    Statement:
+                      - Effect: Allow
+                        Action: lambda:InvokeFunction
+                        Resource: !GetAtt ScannerFunction.Arn
+
+          TriggerFunction:
+            Type: AWS::Lambda::Function
+            Properties:
+              Runtime: python3.12
+              Handler: index.handler
+              Role: !GetAtt TriggerRole.Arn
+              Timeout: 360
+              Code:
+                ZipFile: |
+                  import boto3, json, cfnresponse
+                  def handler(event, context):
+                      if event["RequestType"] == "Delete":
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                          return
+                      try:
+                          boto3.client("lambda").invoke(FunctionName=event["ResourceProperties"]["FunctionName"], InvocationType="Event")
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      except Exception as e:
+                          cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+
+          InitialScan:
+            Type: AWS::CloudFormation::CustomResource
+            Properties:
+              ServiceToken: !GetAtt TriggerFunction.Arn
+              FunctionName: !Ref ScannerFunction
 
           ScanSchedule:
             Type: AWS::Events::Rule

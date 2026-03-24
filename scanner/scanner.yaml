@@ -12,10 +12,40 @@ Conditions:
 
 Resources:
 
+  SnsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: CMK for litellm scanner SNS topic
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: RootAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: kms:*
+            Resource: "*"
+          - Sid: AllowSNS
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action:
+              - kms:GenerateDataKey
+              - kms:Decrypt
+            Resource: "*"
+
+  SnsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/litellm-scanner-sns-${AWS::StackName}"
+      TargetKeyId: !Ref SnsKey
+
   ScanResultsTopic:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: litellm-scan-results
+      KmsMasterKeyId: !Ref SnsKey
 
   ScanResultsSubscription:
     Type: AWS::SNS::Subscription
@@ -95,6 +125,12 @@ Resources:
                 Action:
                   - sns:Publish
                 Resource: !Ref ScanResultsTopic
+              - Sid: SNSKeyAccess
+                Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Resource: !GetAtt SnsKey.Arn
 
   ScannerFunction:
     Type: AWS::Lambda::Function
