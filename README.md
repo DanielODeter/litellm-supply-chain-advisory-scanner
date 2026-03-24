@@ -40,7 +40,7 @@ If `litellm==1.82.8` was installed anywhere with AWS credentials present:
 
 ---
 
-## AWS Environment Scanner
+## AWS Resource Scanner
 
 Two deployment models are available depending on your AWS environment.
 
