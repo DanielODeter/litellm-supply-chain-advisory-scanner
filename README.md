@@ -1,6 +1,6 @@
 # litellm Supply Chain Attack — AWS Resource Scanner
 
-> ⚠️ **Disclaimer**: This scanner is provided for informational and defensive purposes only. Results should be validated by a qualified security professional. The authors assume no liability for actions taken based on scanner output.
+> ⚠️ **Disclaimer**: This is a sample. Users are responsible for ensuring that the code herein is compliant with your own security and compliance standards.
 
 > Detect exposure to the litellm 1.82.8 PyPI supply chain compromise across your AWS environment.
 
