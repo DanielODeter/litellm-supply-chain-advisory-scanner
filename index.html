@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>litellm 1.82.8 Supply Chain Attack — AWS Impact Advisory</title>
+  <title>litellm Supply Chain Attack — AWS Resource Scanner</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 16px; line-height: 1.6; color: #24292e; background: #fff; }
@@ -80,8 +80,8 @@
 
   <!-- Header -->
   <div class="header">
-    <h1>⚠️ litellm 1.82.8 Supply Chain Attack</h1>
-    <p class="subtitle">AWS Impact Advisory &amp; Environment Scanner</p>
+    <h1>🔍 litellm Supply Chain Attack — AWS Resource Scanner</h1>
+    <p class="subtitle">Detect exposure to the litellm 1.82.8 PyPI supply chain compromise across your AWS environment</p>
     <br>
     <span class="badge badge-critical">CRITICAL</span>
     <span class="badge badge-date">Discovered: 2026-03-24</span>
@@ -100,21 +100,19 @@
     <ul>
       <li><a href="https://github.com/BerriAI/litellm/issues/24512" target="_blank">GitHub Issue #24512 — Original Report</a></li>
       <li><a href="https://github.com/BerriAI/litellm/issues/24518" target="_blank">GitHub Issue #24518 — LiteLLM Team Response</a></li>
-      <li><a href="https://github.com/danielodeter/litellm-supply-chain-advisory" target="_blank">This Repository — Scanner &amp; CFN Template</a></li>
+      <li><a href="https://github.com/DanielODeter/litellm-supply-chain-advisory-scanner" target="_blank">This Repository — AWS Resource Scanner</a></li>
     </ul>
   </div>
 
   <!-- Overview -->
   <h2>Overview</h2>
   <p>
-    The <code>litellm==1.82.8</code> wheel package published to PyPI contains a malicious <code>litellm_init.pth</code> file (34,628 bytes).
-    Python automatically executes <code>.pth</code> files in <code>site-packages/</code> on every interpreter startup — <strong>no <code>import litellm</code> required</strong>.
-    The payload is double base64-encoded, collects credentials from the host, encrypts them with AES-256 + RSA-4096, and exfiltrates to an attacker-controlled domain.
+    This repository provides a CloudFormation-deployable AWS Resource Scanner to detect whether your AWS environment was exposed to the <code>litellm==1.82.8</code> PyPI supply chain compromise.
+    The scanner checks Lambda, ECR, ECS, CodeBuild, EC2, CloudTrail, and GuardDuty across a single account or your entire AWS Organization.
   </p>
   <p>
-    This is a supply chain compromise. The malicious file is listed in the package's own <code>RECORD</code>:
+    For full details of the attack, see the <a href="https://github.com/BerriAI/litellm/issues/24512" target="_blank">original advisory (GitHub Issue #24512)</a>. In summary: the package contains a malicious <code>litellm_init.pth</code> file that executes automatically on every Python startup, collects credentials, and exfiltrates them to an attacker-controlled domain.
   </p>
-  <pre><code>litellm_init.pth,sha256=ceNa7wMJnNHy1kRnNCcwJaFjWX3pORLfMh7xGL8TUjg,34628</code></pre>
 
   <!-- IOCs -->
   <h2>Indicators of Compromise (IOCs)</h2>

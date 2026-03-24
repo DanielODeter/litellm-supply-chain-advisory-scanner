@@ -1,16 +1,14 @@
-# litellm 1.82.8 Supply Chain Attack — AWS Impact Advisory
+# litellm Supply Chain Attack — AWS Resource Scanner
 
-> **Security Advisory**: The `litellm==1.82.8` PyPI package contains a malicious credential-stealing payload that executes automatically on every Python startup. This repository provides an AWS environment scanner to detect exposure.
+> Detect exposure to the litellm 1.82.8 PyPI supply chain compromise across your AWS environment.
 
-## Overview
+This repository provides a CloudFormation-deployable AWS Resource Scanner to check whether your AWS environment was exposed to the `litellm==1.82.8` supply chain compromise. It supports both single-account and AWS Organizations deployments.
 
-The `litellm==1.82.8` wheel on PyPI contains `litellm_init.pth` (34,628 bytes) — a malicious `.pth` file that Python executes automatically on interpreter startup via the [site module](https://docs.python.org/3/library/site.html). No `import litellm` is required.
+For full details of the attack, see the original advisory. In summary: the package contains a malicious `litellm_init.pth` file that executes automatically on every Python startup, collects credentials (AWS, SSH, Kubernetes, Docker, shell history), and exfiltrates them to an attacker-controlled domain.
 
-The payload is double base64-encoded, collects credentials from the host (AWS, SSH, Kubernetes, GCP, Azure, Docker, shell history, crypto wallets), encrypts them with AES-256 + RSA-4096, and exfiltrates to `models.litellm.cloud`.
-
-**Original report**: [GitHub Issue #24512](https://github.com/BerriAI/litellm/issues/24512) by @isfinne  
+**Original advisory**: [GitHub Issue #24512](https://github.com/BerriAI/litellm/issues/24512) by @isfinne  
 **LiteLLM team response**: [GitHub Issue #24518](https://github.com/BerriAI/litellm/issues/24518)  
-**GitHub Pages**: https://danielodeter.github.io/litellm-supply-chain-advisory/
+**GitHub Pages**: https://danielodeter.github.io/litellm-supply-chain-advisory-scanner/
 
 ---
 
