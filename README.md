@@ -57,15 +57,15 @@ Two deployment models are available depending on your AWS environment.
 
 ### What Gets Scanned (both models)
 
-| Service | What it checks |
-|---------|---------------|
-| Lambda | Env vars, container images, layers referencing litellm |
-| ECR | Image tags referencing litellm; images pushed after 2026-03-24 |
-| ECS | Task definition container images and env vars |
-| CodeBuild | Inline buildspecs installing litellm, especially 1.82.8 |
-| EC2 | SSM Run Command searches for `litellm_init.pth` on running instances |
-| CloudTrail | IAM modifications (CreateUser, CreateAccessKey, etc.) after 2026-03-24 |
-| GuardDuty | Credential exfiltration findings since compromise date |
+| Service | What it checks | Limitations |
+|---------|---------------|-------------|
+| Lambda | Env vars, container images, layers referencing litellm | Only checks functions visible to the scanner role; does not inspect layer zip contents |
+| ECR | Image tags referencing litellm; images pushed after 2026-03-24 | Does not inspect image contents or scan for the malicious file inside layers |
+| ECS | Task definition container images and env vars | Only active task definitions; does not check running tasks or Fargate sidecar containers |
+| CodeBuild | Inline buildspecs installing litellm, especially 1.82.8 | Only checks inline buildspecs; external buildspec files (e.g. in S3 or CodeCommit) are not scanned |
+| EC2 | SSM Run Command searches for `litellm_init.pth` on running instances | Requires SSM Agent installed and `AmazonSSMManagedInstanceCore` attached to the instance role; instances without SSM will not be checked |
+| CloudTrail | IAM modifications (CreateUser, CreateAccessKey, etc.) after 2026-03-24 | Limited to the last 90 days of CloudTrail event history; only checks a subset of IAM event types |
+| GuardDuty | Credential exfiltration findings since compromise date | Requires GuardDuty to be enabled in the account and region; findings may take time to appear |
 
 ---
 
