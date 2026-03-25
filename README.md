@@ -77,14 +77,29 @@ Two deployment models are available depending on your AWS environment.
 - ✅ Development or test environments
 - ✅ Quick one-off scan
 
+**Windows:**
 ```bat
 cd scanner
 deploy.bat single your@email.com your-aws-profile
 ```
 
+**Mac/Linux:**
+```bash
+cd scanner
+chmod +x deploy.sh
+./deploy.sh single your@email.com your-aws-profile
+```
+
 Triggers an immediate scan on deploy, schedules daily re-scans, and optionally emails results via SNS.
 
 **Manual invoke:**
+
+_Windows:_
+```bat
+aws lambda invoke --function-name litellm-scanner-litellm-scanner-single --payload "{}" results.json
+```
+
+_Mac/Linux:_
 ```bash
 aws lambda invoke --function-name litellm-scanner-litellm-scanner-single --payload '{}' results.json
 ```
@@ -116,10 +131,17 @@ aws organizations enable-aws-service-access \
   --service-principal stacksets.cloudformation.amazonaws.com
 ```
 
-**Deploy:**
+**Windows:**
 ```bat
 cd scanner
-deploy.bat org o-xxxxxxxxxx your@email.com your-mgmt-profile "us-east-1,us-west-2"
+deploy.bat org o-xxxxxxxxxx r-xxxx your@email.com your-mgmt-profile "us-east-1,us-west-2"
+```
+
+**Mac/Linux:**
+```bash
+cd scanner
+chmod +x deploy.sh
+./deploy.sh org o-xxxxxxxxxx r-xxxx your@email.com your-mgmt-profile "us-east-1,us-west-2"
 ```
 
 This deploys:
@@ -129,6 +151,13 @@ This deploys:
 4. SNS topic for org-wide consolidated notifications
 
 **Manual aggregate:**
+
+_Windows:_
+```bat
+aws lambda invoke --function-name litellm-aggregator-litellm-scanner-org --payload "{}" aggregated.json
+```
+
+_Mac/Linux:_
 ```bash
 aws lambda invoke --function-name litellm-aggregator-litellm-scanner-org --payload '{}' aggregated.json
 ```
@@ -143,6 +172,7 @@ aws cloudformation list-stack-instances \
 
 **Parameters:**
 - `OrganizationId` — your org ID (e.g. `o-xxxxxxxxxx`)
+- `DeploymentTargetOU` — root or OU ID to deploy into (e.g. `r-xxxx` or `ou-xxxx-xxxxxxxx`)
 - `NotificationEmail` — optional consolidated SNS email
 - `DeploymentRegions` — comma-delimited regions (default: `us-east-1`)
 
