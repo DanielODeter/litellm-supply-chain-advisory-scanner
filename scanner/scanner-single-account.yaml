@@ -39,10 +39,40 @@ Resources:
             Status: Enabled
             ExpirationInDays: 90
 
+  SnsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: CMK for litellm scanner SNS topic
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: RootAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: kms:*
+            Resource: "*"
+          - Sid: AllowSNS
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action:
+              - kms:GenerateDataKey
+              - kms:Decrypt
+            Resource: "*"
+
+  SnsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/litellm-scanner-sns-${AWS::StackName}"
+      TargetKeyId: !Ref SnsKey
+
   ScanResultsTopic:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: !Sub "litellm-scan-results-${AWS::AccountId}"
+      KmsMasterKeyId: !Ref SnsKey
 
   ScanResultsSubscription:
     Type: AWS::SNS::Subscription
@@ -99,6 +129,12 @@ Resources:
                 Action:
                   - sns:Publish
                 Resource: !Ref ScanResultsTopic
+              - Sid: SNSKeyAccess
+                Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Resource: !GetAtt SnsKey.Arn
 
   ScannerFunction:
     Type: AWS::Lambda::Function
@@ -147,7 +183,8 @@ Resources:
                               add("Lambda", name, "MEDIUM", f"Container image references litellm: {image}")
                           for layer in fn.get("Layers", []):
                               try:
-                                  info = client.get_layer_version_by_arn(Arn=layer["Arn"])
+                                  parts = layer["Arn"].split(":")
+                                  info = client.get_layer_version(LayerName=":".join(parts[:-1]), VersionNumber=int(parts[-1]))
                                   if "litellm" in info.get("Description", "").lower():
                                       add("Lambda", name, "HIGH", f"Layer references litellm: {layer['Arn']}")
                               except ClientError:
@@ -272,10 +309,30 @@ Resources:
               boto3.client("s3").put_object(Bucket=bucket, Key=key, Body=json.dumps(summary, default=str), ContentType="application/json")
               sns_arn = os.environ.get("SNS_TOPIC_ARN")
               if sns_arn:
+                  lines = [
+                      f"litellm 1.82.8 Supply Chain Scanner - Single Account Report",
+                      f"Scan Time : {summary['scan_time']}",
+                      f"Account   : {summary['account']}",
+                      f"",
+                      f"FINDINGS SUMMARY",
+                      f"  CRITICAL : {summary['critical']}",
+                      f"  HIGH     : {summary['high']}",
+                      f"  MEDIUM   : {summary['medium']}",
+                      f"  INFO     : {summary['info']}",
+                      f"  TOTAL    : {summary['total_findings']}",
+                      f"",
+                  ]
+                  if summary['total_findings'] == 0:
+                      lines.append("No findings detected. Environment appears clean.")
+                  else:
+                      lines.append("FINDINGS DETAIL")
+                      for f in findings:
+                          lines.append(f"  [{f['severity']}] {f['service']} / {f['resource']}")
+                          lines.append(f"    {f['detail']}")
                   boto3.client("sns").publish(
                       TopicArn=sns_arn,
-                      Subject=f"litellm Scan: {summary['critical']} CRITICAL, {summary['high']} HIGH findings",
-                      Message=json.dumps(summary, indent=2, default=str)
+                      Subject=f"[litellm Scanner] {summary['critical']} CRITICAL, {summary['high']} HIGH, {summary['medium']} MEDIUM",
+                      Message="\n".join(lines)
                   )
               logger.info(json.dumps(summary, default=str))
               return summary
@@ -307,19 +364,26 @@ Resources:
       Runtime: python3.12
       Handler: index.handler
       Role: !GetAtt TriggerRole.Arn
-      Timeout: 360
+      Timeout: 30
       Code:
         ZipFile: |
-          import boto3, json, cfnresponse
+          import boto3, json
+          from urllib.request import urlopen, Request
+
+          def send(event, status, data={}):
+              body = json.dumps({"Status": status, "Reason": "", "PhysicalResourceId": "InitialScan", "StackId": event["StackId"], "RequestId": event["RequestId"], "LogicalResourceId": event["LogicalResourceId"], "Data": data}).encode()
+              req = Request(event["ResponseURL"], data=body, headers={"Content-Type": "", "Content-Length": len(body)}, method="PUT")
+              urlopen(req, timeout=10)
+
           def handler(event, context):
               if event["RequestType"] == "Delete":
-                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  send(event, "SUCCESS")
                   return
               try:
-                  r = boto3.client("lambda").invoke(FunctionName=event["ResourceProperties"]["FunctionName"], InvocationType="RequestResponse")
-                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {"Result": r["Payload"].read().decode()})
+                  boto3.client("lambda").invoke(FunctionName=event["ResourceProperties"]["FunctionName"], InvocationType="Event")
+                  send(event, "SUCCESS")
               except Exception as e:
-                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+                  send(event, "FAILED", {"Error": str(e)})
 
   InitialScan:
     Type: AWS::CloudFormation::CustomResource

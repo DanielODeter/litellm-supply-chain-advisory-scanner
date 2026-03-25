@@ -77,7 +77,7 @@ Resources:
                 Effect: Allow
                 Action:
                   - lambda:ListFunctions
-                  - lambda:GetLayerVersionByArn
+                  - lambda:GetLayerVersion
                 Resource: "*"
               - Sid: ECRRead
                 Effect: Allow
@@ -182,7 +182,8 @@ Resources:
                       for layer in fn.get("Layers", []):
                           arn = layer["Arn"]
                           try:
-                              layer_info = client.get_layer_version_by_arn(Arn=arn)
+                              parts = arn.split(":")
+                              layer_info = client.get_layer_version(LayerName=":".join(parts[:-1]), VersionNumber=int(parts[-1]))
                               if "litellm" in layer_info.get("Description", "").lower():
                                   add_finding("Lambda", name, "HIGH", f"Layer {arn} references litellm")
                           except ClientError:
@@ -342,10 +343,29 @@ Resources:
               }
               sns_arn = os.environ.get("SNS_TOPIC_ARN")
               if sns_arn:
+                  lines = [
+                      f"litellm 1.82.8 Supply Chain Scanner - Single Account Report",
+                      f"Scan Time : {summary['scan_time']}",
+                      f"",
+                      f"FINDINGS SUMMARY",
+                      f"  CRITICAL : {summary['critical']}",
+                      f"  HIGH     : {summary['high']}",
+                      f"  MEDIUM   : {summary['medium']}",
+                      f"  INFO     : {summary['info']}",
+                      f"  TOTAL    : {summary['total_findings']}",
+                      f"",
+                  ]
+                  if summary['total_findings'] == 0:
+                      lines.append("No findings detected. Environment appears clean.")
+                  else:
+                      lines.append("FINDINGS DETAIL")
+                      for f in findings:
+                          lines.append(f"  [{f['severity']}] {f['service']} / {f['resource']}")
+                          lines.append(f"    {f['detail']}")
                   boto3.client("sns").publish(
                       TopicArn=sns_arn,
-                      Subject=f"litellm Scan: {summary['critical']} CRITICAL, {summary['high']} HIGH findings",
-                      Message=json.dumps(summary, indent=2, default=str)
+                      Subject=f"[litellm Scanner] {summary['critical']} CRITICAL, {summary['high']} HIGH, {summary['medium']} MEDIUM",
+                      Message="\n".join(lines)
                   )
               logger.info(f"Scan complete: {json.dumps(summary, default=str)}")
               return summary
@@ -378,24 +398,26 @@ Resources:
       Runtime: python3.12
       Handler: index.handler
       Role: !GetAtt ScanTriggerRole.Arn
-      Timeout: 360
+      Timeout: 30
       Code:
         ZipFile: |
-          import boto3, json, cfnresponse
+          import boto3, json
+          from urllib.request import urlopen, Request
+
+          def send(event, status, data={}):
+              body = json.dumps({"Status": status, "Reason": "", "PhysicalResourceId": "InitialScan", "StackId": event["StackId"], "RequestId": event["RequestId"], "LogicalResourceId": event["LogicalResourceId"], "Data": data}).encode()
+              req = Request(event["ResponseURL"], data=body, headers={"Content-Type": "", "Content-Length": len(body)}, method="PUT")
+              urlopen(req, timeout=10)
+
           def handler(event, context):
               if event["RequestType"] == "Delete":
-                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  send(event, "SUCCESS")
                   return
               try:
-                  client = boto3.client("lambda")
-                  response = client.invoke(
-                      FunctionName=event["ResourceProperties"]["FunctionName"],
-                      InvocationType="RequestResponse"
-                  )
-                  result = json.loads(response["Payload"].read())
-                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {"Result": json.dumps(result)})
+                  boto3.client("lambda").invoke(FunctionName=event["ResourceProperties"]["FunctionName"], InvocationType="Event")
+                  send(event, "SUCCESS")
               except Exception as e:
-                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+                  send(event, "FAILED", {"Error": str(e)})
 
   InitialScan:
     Type: AWS::CloudFormation::CustomResource
