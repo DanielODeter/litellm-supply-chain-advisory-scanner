@@ -247,7 +247,7 @@ Resources:
 
               if sns_arn:
                   lines = [
-                      f"litellm 1.82.8 Supply Chain Scanner — Daily Report",
+                      f"litellm 1.82.8 Supply Chain Scanner - Daily Report",
                       f"Scan Time : {summary['aggregation_time']}",
                       f"Accounts  : {summary['total_accounts']} ({', '.join(summary['accounts_scanned'])})",
                       f"",
