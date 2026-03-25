@@ -8,8 +8,6 @@
 >
 > Deploying AWS Content may incur AWS charges for creating or using AWS chargeable resources or any associated use of AWS Services, such as running Amazon EC2 instances or using Amazon S3 storage.
 >
-> To protect your privacy, we can only communicate account information to the e-mail address you have registered in association with your AWS account. Thank you for using Amazon Web Services. — *The AWS Team*
->
 > The AWS Customer Agreement may be updated from time to time. See [recent changes](https://aws.amazon.com/agreement/recent-changes/) for more information.
 
 This repository provides a CloudFormation-deployable AWS Resource Scanner to check whether your AWS environment was exposed to the `litellm==1.82.8` supply chain compromise. It supports both single-account and AWS Organizations deployments.
