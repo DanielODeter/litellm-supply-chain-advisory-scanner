@@ -27,7 +27,7 @@ If `litellm==1.82.8` was installed anywhere with AWS credentials present:
 
 ---
 
-## IOCs
+## Indicators of Compromise (IOCs)
 
 | Type | Value |
 |------|-------|
