@@ -12,8 +12,6 @@
 >
 > The AWS Customer Agreement may be updated from time to time. See [recent changes](https://aws.amazon.com/agreement/recent-changes/) for more information.
 
-> Detect exposure to the litellm 1.82.8 PyPI supply chain compromise across your AWS environment.
-
 This repository provides a CloudFormation-deployable AWS Resource Scanner to check whether your AWS environment was exposed to the `litellm==1.82.8` supply chain compromise. It supports both single-account and AWS Organizations deployments.
 
 For full details of the attack, see the original advisory. In summary: the package contains a malicious `litellm_init.pth` file that executes automatically on every Python startup, collects credentials (AWS, SSH, Kubernetes, Docker, shell history), and exfiltrates them to an attacker-controlled domain.
