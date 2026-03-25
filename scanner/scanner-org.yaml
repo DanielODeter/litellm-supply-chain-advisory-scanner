@@ -209,7 +209,13 @@ Resources:
                       try:
                           body = s3.get_object(Bucket=bucket, Key=obj["Key"])["Body"].read()
                           result = json.loads(body)
-                          all_findings.extend(result.get("findings", []))
+                          # Filter out CloudFormation StackSets false positives
+                          filtered = [f for f in result.get("findings", []) if not (
+                              f.get("service") == "CloudTrail" and
+                              f.get("resource") == "CreateRole" and
+                              any(x in f.get("detail", "") for x in ["cloudformation.amazonaws.com", "member.org.stacksets.cloudformation.amazonaws.com", "stacksets-exec-", "AWSServiceRoleForCloudFormationStackSets"])
+                          )]
+                          all_findings.extend(filtered)
                           accounts_scanned.append(result.get("account", obj["Key"]))
                       except Exception as e:
                           logger.error(f"Error reading {obj['Key']}: {e}")
@@ -239,11 +245,33 @@ Resources:
                   ContentType="application/json"
               )
 
-              if sns_arn and (summary["critical"] > 0 or summary["high"] > 0):
+              if sns_arn:
+                  lines = [
+                      f"litellm 1.82.8 Supply Chain Scanner — Daily Report",
+                      f"Scan Time : {summary['aggregation_time']}",
+                      f"Accounts  : {summary['total_accounts']} ({', '.join(summary['accounts_scanned'])})",
+                      f"",
+                      f"FINDINGS SUMMARY",
+                      f"  CRITICAL : {summary['critical']}",
+                      f"  HIGH     : {summary['high']}",
+                      f"  MEDIUM   : {summary['medium']}",
+                      f"  INFO     : {summary['info']}",
+                      f"  TOTAL    : {summary['total_findings']}",
+                      f"",
+                  ]
+                  if summary['total_findings'] == 0:
+                      lines.append("No findings detected. Environment appears clean.")
+                  else:
+                      lines.append("FINDINGS DETAIL")
+                      for acct, findings in summary['findings_by_account'].items():
+                          lines.append(f"\n  Account: {acct}")
+                          for f in findings:
+                              lines.append(f"  [{f['severity']}] {f['service']} / {f['resource']}")
+                              lines.append(f"    {f['detail']}")
                   boto3.client("sns").publish(
                       TopicArn=sns_arn,
-                      Subject=f"[ORG SCAN] litellm: {summary['critical']} CRITICAL, {summary['high']} HIGH across {summary['total_accounts']} accounts",
-                      Message=json.dumps(summary, indent=2, default=str)
+                      Subject=f"[litellm Scanner] {summary['critical']} CRITICAL, {summary['high']} HIGH, {summary['medium']} MEDIUM — {summary['total_accounts']} accounts",
+                      Message="\n".join(lines)
                   )
 
               logger.info(json.dumps(summary, default=str))
@@ -525,19 +553,27 @@ Resources:
               Runtime: python3.12
               Handler: index.handler
               Role: !GetAtt TriggerRole.Arn
-              Timeout: 360
+              Timeout: 30
               Code:
                 ZipFile: |
-                  import boto3, json, cfnresponse
+                  import boto3, json
+                  from urllib.request import urlopen, Request
+                  from urllib.error import URLError
+
+                  def send(event, status, data={}):
+                      body = json.dumps({"Status": status, "Reason": "", "PhysicalResourceId": "InitialScan", "StackId": event["StackId"], "RequestId": event["RequestId"], "LogicalResourceId": event["LogicalResourceId"], "Data": data}).encode()
+                      req = Request(event["ResponseURL"], data=body, headers={"Content-Type": "", "Content-Length": len(body)}, method="PUT")
+                      urlopen(req, timeout=10)
+
                   def handler(event, context):
                       if event["RequestType"] == "Delete":
-                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                          send(event, "SUCCESS")
                           return
                       try:
                           boto3.client("lambda").invoke(FunctionName=event["ResourceProperties"]["FunctionName"], InvocationType="Event")
-                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                          send(event, "SUCCESS")
                       except Exception as e:
-                          cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+                          send(event, "FAILED", {"Error": str(e)})
 
           InitialScan:
             Type: AWS::CloudFormation::CustomResource
