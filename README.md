@@ -190,7 +190,7 @@ aws ssm send-command \
 </details>
 
 <details>
-<summary>☁️ AWS Impact by Environment</summary>
+<summary>☁️ AWS Impact by Resource</summary>
 
 | Resource | Severity | What's at risk | Checked by scanner |
 |----------|----------|----------------|--------------------|
