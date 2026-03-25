@@ -207,6 +207,46 @@ aws ssm send-command \
 </details>
 
 <details>
+<summary>💰 Scanner Costs</summary>
+
+All costs are based on daily scans. Most services fall within the AWS Free Tier at this usage level — the KMS CMK is the only fixed cost.
+
+**Cost per account (monthly)**
+
+| Service | Cost | Notes |
+|---------|------|-------|
+| Lambda | ~$0.00 | ~300s/day at 256MB, within free tier |
+| EventBridge | ~$0.00 | Scheduling is free |
+| S3 | ~$0.00 | ~2KB per scan result, negligible |
+| SNS | ~$0.00 | Within 1,000 free email deliveries/month |
+| KMS CMK | $1.00 | 1 CMK per account, flat monthly fee |
+| **Per account total** | **~$1.00/month** | |
+
+**Org deployment adds (management account only)**
+
+| Service | Cost | Notes |
+|---------|------|-------|
+| KMS CMK (SNS) | $1.00 | 1 additional CMK for consolidated SNS topic |
+| Aggregator Lambda | ~$0.00 | Within free tier |
+| S3 (central bucket) | ~$0.00 | Negligible storage |
+| **Org overhead total** | **~$1.00/month** | One-time regardless of account count |
+
+**Examples**
+
+| Deployment | Accounts | Est. Monthly Cost |
+|------------|----------|-------------------|
+| Single account | 1 | ~$1.00 |
+| Org deployment | 1 | ~$2.00 (member CMK + org overhead) |
+| Org deployment | 10 | ~$11.00 |
+| Org deployment | 100 | ~$101.00 |
+
+> Costs will increase if accounts have large numbers of Lambda functions, ECS task definitions, or EC2 instances that extend scan duration beyond the free tier compute threshold. Use the [AWS Pricing Calculator](https://calculator.aws) for a precise estimate based on your environment.
+
+</details>
+
+---
+
+<details>
 <summary>🛡️ Prevention Going Forward</summary>
 
 - Pin exact package versions and verify hashes: `pip hash`
