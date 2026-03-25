@@ -489,7 +489,16 @@ Resources:
                           for en in ["CreateUser", "CreateAccessKey", "AttachUserPolicy", "CreateRole"]:
                               for ev in ct.lookup_events(LookupAttributes=[{"AttributeKey": "EventName", "AttributeValue": en}], StartTime=COMPROMISE_DATE, MaxResults=5).get("Events", []):
                                   d = json.loads(ev.get("CloudTrailEvent", "{}"))
-                                  add("CloudTrail", en, "MEDIUM", f"IAM change | user={d.get('userIdentity',{}).get('arn','?')} | ip={d.get('sourceIPAddress','?')} | time={ev['EventTime']}")
+                                  source_ip = d.get("sourceIPAddress", "")
+                                  user_arn = d.get("userIdentity", {}).get("arn", "")
+                                  if any(x in source_ip for x in ["cloudformation.amazonaws.com", "member.org.stacksets.cloudformation.amazonaws.com"]):
+                                      continue
+                                  if any(x in user_arn for x in ["stacksets-exec-", "AWSServiceRoleForCloudFormationStackSets"]):
+                                      continue
+                                  request_params = json.dumps(d.get("requestParameters") or {})
+                                  if any(x in request_params for x in ["litellm-scanner", "litellm-member-scanner", "litellm-aggregator"]):
+                                      continue
+                                  add("CloudTrail", en, "MEDIUM", f"IAM change | user={user_arn} | ip={source_ip} | time={ev['EventTime']}")
                       except ClientError as e:
                           logger.error(f"CloudTrail: {e}")
 

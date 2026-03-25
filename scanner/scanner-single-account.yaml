@@ -269,8 +269,18 @@ Resources:
                           StartTime=COMPROMISE_DATE, MaxResults=10
                       ).get("Events", []):
                           detail = json.loads(event.get("CloudTrailEvent", "{}"))
+                          source_ip = detail.get("sourceIPAddress", "")
+                          user_arn = detail.get("userIdentity", {}).get("arn", "")
+                          # Filter scanner-created resources and CFN StackSets activity
+                          if any(x in source_ip for x in ["cloudformation.amazonaws.com", "member.org.stacksets.cloudformation.amazonaws.com"]):
+                              continue
+                          if any(x in user_arn for x in ["stacksets-exec-", "AWSServiceRoleForCloudFormationStackSets"]):
+                              continue
+                          request_params = json.dumps(detail.get("requestParameters") or {})
+                          if any(x in request_params for x in ["litellm-scanner", "litellm-member-scanner", "litellm-aggregator"]):
+                              continue
                           add("CloudTrail", event_name, "MEDIUM",
-                              f"IAM modification after compromise date | user={detail.get('userIdentity',{}).get('arn','unknown')} | ip={detail.get('sourceIPAddress','unknown')} | time={event['EventTime']}")
+                              f"IAM modification after compromise date | user={user_arn or 'unknown'} | ip={source_ip or 'unknown'} | time={event['EventTime']}")
               except ClientError as e:
                   logger.error(f"CloudTrail scan error: {e}")
 
